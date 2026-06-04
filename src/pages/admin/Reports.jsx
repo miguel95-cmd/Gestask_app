@@ -11,41 +11,59 @@ export default function Reports() {
   const [error, setError] = useState('')
 
   async function loadData() {
-    setLoading(true)
-    setError('')
+    try {
+      setLoading(true)
+      setError('')
 
-    const [{ data: projectsData, error: projectsError }, { data: tasksData, error: tasksError }] = await Promise.all([
-      supabase.from('projects').select('*').order('created_at', { ascending: false }),
-      supabase.from('tasks').select('*').order('created_at', { ascending: false }),
-    ])
+      const [projectsResult, tasksResult] = await Promise.all([
+        supabase.from('projects').select('*').order('created_at', { ascending: false }),
+        supabase.from('tasks').select('*').order('created_at', { ascending: false }),
+      ])
 
-    if (projectsError || tasksError) {
-      setError(projectsError?.message || tasksError?.message || 'No se pudieron cargar los reportes.')
+      const projectsError = projectsResult.error
+      const tasksError = tasksResult.error
+
+      if (projectsError || tasksError) {
+        throw new Error(projectsError?.message || tasksError?.message || 'No se pudieron cargar los reportes desde la base de datos.')
+      }
+
+      setProjects(projectsResult.data ?? [])
+      setTasks(tasksResult.data ?? [])
+    } catch (err) {
+      console.error('Error crítico en reportes:', err.message)
+      setError(err.message || 'Error de conexión con el servidor. Por favor, intenta de nuevo.')
+      // Inicializamos estados limpios en caso de error para evitar congelamiento en los useMemo
+      setProjects([])
+      setTasks([])
+    } finally {
+      // Garantiza apagar el estado "Cargando..." pase lo que pase
+      setLoading(false)
     }
-
-    setProjects(projectsData ?? [])
-    setTasks(tasksData ?? [])
-    setLoading(false)
   }
 
   useEffect(() => {
     loadData()
   }, [])
 
-  const projectById = useMemo(() => projects.reduce((accumulator, project) => ({ ...accumulator, [project.id]: project }), {}), [projects])
-  const projectSummaries = useMemo(
-    () =>
-      projects.map((project) => {
-        const projectTasks = tasks.filter((task) => task.project_id === project.id)
-        const completedTasks = projectTasks.filter((task) => task.status === 'finalizado').length
-        const percentage = projectTasks.length ? Math.round((completedTasks / projectTasks.length) * 100) : 0
+  // Protegemos los reducers y mapeos asegurando que operen siempre con arreglos válidos
+  const projectById = useMemo(() => {
+    if (!Array.isArray(projects)) return {}
+    return projects.reduce((accumulator, project) => ({ ...accumulator, [project.id]: project }), {})
+  }, [projects])
 
-        return { ...project, completedTasks, totalTasks: projectTasks.length, percentage }
-      }),
-    [projects, tasks],
-  )
+  const projectSummaries = useMemo(() => {
+    if (!Array.isArray(projects) || !Array.isArray(tasks)) return []
+    return projects.map((project) => {
+      const projectTasks = tasks.filter((task) => task.project_id === project.id)
+      const completedTasks = projectTasks.filter((task) => task.status === 'finalizado').length
+      const percentage = projectTasks.length ? Math.round((completedTasks / projectTasks.length) * 100) : 0
+
+      return { ...project, completedTasks, totalTasks: projectTasks.length, percentage }
+    })
+  }, [projects, tasks])
 
   const completedLast7Days = useMemo(() => {
+    if (!Array.isArray(tasks)) return []
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
 
@@ -54,7 +72,10 @@ export default function Reports() {
       .sort((left, right) => new Date(right.completed_at) - new Date(left.completed_at))
   }, [tasks])
 
-  const overdueTasks = useMemo(() => tasks.filter((task) => isOverdue(task.due_date, task.status)), [tasks])
+  const overdueTasks = useMemo(() => {
+    if (!Array.isArray(tasks)) return []
+    return tasks.filter((task) => task.status && isOverdue(task.due_date, task.status))
+  }, [tasks])
 
   if (loading) {
     return <div className="rounded-xl border border-outline-variant bg-surface p-6 text-body-sm font-body-sm text-on-surface-variant">Cargando reportes...</div>
@@ -67,7 +88,17 @@ export default function Reports() {
         <p className="mt-1 text-body-md font-body-md text-on-surface-variant">Seguimiento de progreso y alertas de tareas.</p>
       </div>
 
-      {error ? <div className="rounded-lg border border-error bg-error-container px-4 py-3 text-body-sm font-body-sm text-on-error-container">{error}</div> : null}
+      {error ? (
+        <div className="rounded-lg border border-error bg-error-container px-4 py-3 text-body-sm font-body-sm text-on-error-container flex flex-col gap-2">
+          <span>{error}</span>
+          <button 
+            onClick={loadData} 
+            className="w-fit px-3 py-1 bg-error text-white font-medium rounded text-xs hover:bg-opacity-90 transition-all"
+          >
+            Reintentar cargar datos
+          </button>
+        </div>
+      ) : null}
 
       <section className="grid gap-gutter md:grid-cols-2 xl:grid-cols-3">
         {projectSummaries.map((project) => (
