@@ -10,17 +10,26 @@ import Kanban from './pages/admin/Kanban'
 import Reports from './pages/admin/Reports'
 import MyTasks from './pages/student/MyTasks'
 
+const Spinner = () => (
+  <div className="flex min-h-screen items-center justify-center bg-surface text-on-surface">
+    Cargando...
+  </div>
+)
+
 function ProtectedRoute({ children, allowedRole }) {
-  const { user, profile, loading } = useAuth()
+  const { user, profile, loading, profileLoading } = useAuth()
 
-  if (loading) {
-    return <div className="flex min-h-screen items-center justify-center bg-surface text-on-surface">Cargando...</div>
-  }
+  // 1. Todavía resolviendo la sesión inicial
+  if (loading) return <Spinner />
 
-  if (!user) {
-    return <Navigate to="/login" replace />
-  }
+  // 2. Sesión confirmada pero el perfil aún no llegó de Supabase
+  //    → esperar en lugar de evaluar el rol con profile === null
+  if (user && profileLoading) return <Spinner />
 
+  // 3. Sin sesión → login
+  if (!user) return <Navigate to="/login" replace />
+
+  // 4. Rol incorrecto → login
   if (allowedRole && profile?.role !== allowedRole) {
     return <Navigate to="/login" replace />
   }
