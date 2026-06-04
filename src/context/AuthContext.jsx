@@ -47,9 +47,12 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let mounted = true
 
-    async function bootstrap() {
+    // Agregamos 'isBackground' para saber si la app apenas está abriendo o si solo volvimos a la pestaña
+    async function bootstrap(isBackground = false) {
       try {
-        if (mounted) setLoading(true) // Esto asegura que la app sepa que está verificando datos de nuevo
+        // SOLO mostramos la pantalla gigante de carga si NO estamos en segundo plano (carga inicial)
+        if (mounted && !isBackground) setLoading(true)
+        
         const { data: { session } } = await supabase.auth.getSession()
         
         if (!mounted) return
@@ -64,33 +67,28 @@ export function AuthProvider({ children }) {
       } catch (err) {
         console.error("Error inicializando la sesión de autenticación:", err)
       } finally {
-        if (mounted) setLoading(false) // Aquí nos aseguramos de apagar el estado de carga
+        if (mounted) setLoading(false)
       }
     }
 
-    // --- AQUÍ ESTÁ EL ARREGLO PRINCIPAL ---
+    // Cuando volvemos a la pestaña, verificamos pero de forma silenciosa (isBackground = true)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        bootstrap() // Obligamos a revisar la sesión y los perfiles al volver a la pestaña
+        bootstrap(true) 
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    // --------------------------------------
 
-    // Escuchador optimizado para evitar caídas de datos tras inactividad
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return
 
-      // Si el evento es solo renovación de token, actualiza el usuario de forma segura
-      // sin saturar a la base de datos con consultas bloqueadas por permisos temporales.
       if (event === 'TOKEN_REFRESHED' && session?.user) {
         setUser(session.user)
         setLoading(false)
         return 
       }
 
-      // Manejo estándar para el resto de eventos (SIGNED_IN, SIGNED_OUT, etc.)
       setUser(session?.user ?? null)
 
       if (session?.user) {
@@ -102,12 +100,13 @@ export function AuthProvider({ children }) {
       setLoading(false)
     })
 
-    bootstrap()
+    // La primera vez que entramos a la app sí mostramos la carga (isBackground = false)
+    bootstrap(false)
 
     return () => {
       mounted = false
       subscription.unsubscribe()
-      document.removeEventListener('visibilitychange', handleVisibilityChange) // Limpieza crucial del evento
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [loadProfile])
 
