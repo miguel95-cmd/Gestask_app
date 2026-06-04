@@ -48,22 +48,38 @@ export function AuthProvider({ children }) {
     let mounted = true
 
     async function bootstrap() {
-      const { data: { session } } = await supabase.auth.getSession()
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        
+        if (!mounted) return
 
-      if (!mounted) return
+        setUser(session?.user ?? null)
 
-      setUser(session?.user ?? null)
-
-      if (session?.user) {
-        await loadProfile(session.user)
-      } else {
-        setProfile(null)
+        if (session?.user) {
+          await loadProfile(session.user)
+        } else {
+          setProfile(null)
+        }
+      } catch (err) {
+        console.error("Error inicializando la sesión de autenticación:", err)
+      } finally {
+        if (mounted) setLoading(false)
       }
-
-      setLoading(false)
     }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    // Escuchador optimizado para evitar caídas de datos tras inactividad
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return
+
+      // Si el evento es solo renovación de token, actualiza el usuario de forma segura
+      // sin saturar a la base de datos con consultas bloqueadas por permisos temporales.
+      if (event === 'TOKEN_REFRESHED' && session?.user) {
+        setUser(session.user)
+        setLoading(false)
+        return 
+      }
+
+      // Manejo estándar para el resto de eventos (SIGNED_IN, SIGNED_OUT, etc.)
       setUser(session?.user ?? null)
 
       if (session?.user) {
