@@ -49,6 +49,7 @@ export function AuthProvider({ children }) {
 
     async function bootstrap() {
       try {
+        if (mounted) setLoading(true) // Esto asegura que la app sepa que está verificando datos de nuevo
         const { data: { session } } = await supabase.auth.getSession()
         
         if (!mounted) return
@@ -63,9 +64,19 @@ export function AuthProvider({ children }) {
       } catch (err) {
         console.error("Error inicializando la sesión de autenticación:", err)
       } finally {
-        if (mounted) setLoading(false)
+        if (mounted) setLoading(false) // Aquí nos aseguramos de apagar el estado de carga
       }
     }
+
+    // --- AQUÍ ESTÁ EL ARREGLO PRINCIPAL ---
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        bootstrap() // Obligamos a revisar la sesión y los perfiles al volver a la pestaña
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    // --------------------------------------
 
     // Escuchador optimizado para evitar caídas de datos tras inactividad
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -96,6 +107,7 @@ export function AuthProvider({ children }) {
     return () => {
       mounted = false
       subscription.unsubscribe()
+      document.removeEventListener('visibilitychange', handleVisibilityChange) // Limpieza crucial del evento
     }
   }, [loadProfile])
 
