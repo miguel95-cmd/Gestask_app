@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 
 import { AuthContext } from './authContext'
@@ -7,12 +7,18 @@ function buildFallbackProfile(sessionUser) {
   if (!sessionUser) return null
 
   const emailLocalPart = sessionUser.email?.split('@')[0] ?? 'usuario'
-  const inferredRole = sessionUser.user_metadata?.role ?? sessionUser.app_metadata?.role ?? (emailLocalPart.toLowerCase().includes('admin') ? 'admin' : null)
+  const inferredRole =
+    sessionUser.user_metadata?.role ??
+    sessionUser.app_metadata?.role ??
+    (emailLocalPart.toLowerCase().includes('admin') ? 'admin' : null)
 
   return {
     id: sessionUser.id,
     email: sessionUser.email ?? '',
-    full_name: sessionUser.user_metadata?.full_name ?? sessionUser.email?.split('@')[0] ?? 'Usuario',
+    full_name:
+      sessionUser.user_metadata?.full_name ??
+      sessionUser.email?.split('@')[0] ??
+      'Usuario',
     role: inferredRole,
   }
 }
@@ -22,13 +28,22 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // Ref para evitar actualizaciones de estado en componente desmontado
+  const mounted = useRef(true)
+
   const loadProfile = useCallback(async (sessionUser) => {
     if (!sessionUser) {
-      setProfile(null)
+      if (mounted.current) setProfile(null)
       return null
     }
 
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', sessionUser.id).maybeSingle()
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', sessionUser.id)
+      .maybeSingle()
+
+    if (!mounted.current) return null
 
     if (data) {
       setProfile(data)
@@ -45,49 +60,18 @@ export function AuthProvider({ children }) {
   }, [])
 
   useEffect(() => {
-    let mounted = true
+    mounted.current = true
 
-    // Agregamos 'isBackground' para saber si la app apenas está abriendo o si solo volvimos a la pestaña
-    async function bootstrap(isBackground = false) {
-      try {
-        // SOLO mostramos la pantalla gigante de carga si NO estamos en segundo plano (carga inicial)
-        if (mounted && !isBackground) setLoading(true)
-        
-        const { data: { session } } = await supabase.auth.getSession()
-        
-        if (!mounted) return
+    // Flag para que el listener sepa si bootstrap ya terminó,
+    // evitando que ambos corran en paralelo al inicio.
+    let bootstrapDone = false
 
-        setUser(session?.user ?? null)
+    async function bootstrap() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
 
-        if (session?.user) {
-          await loadProfile(session.user)
-        } else {
-          setProfile(null)
-        }
-      } catch (err) {
-        console.error("Error inicializando la sesión de autenticación:", err)
-      } finally {
-        if (mounted) setLoading(false)
-      }
-    }
-
-    // Cuando volvemos a la pestaña, verificamos pero de forma silenciosa (isBackground = true)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        bootstrap(true) 
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return
-
-      if (event === 'TOKEN_REFRESHED' && session?.user) {
-        setUser(session.user)
-        setLoading(false)
-        return 
-      }
+      if (!mounted.current) return
 
       setUser(session?.user ?? null)
 
@@ -97,16 +81,38 @@ export function AuthProvider({ children }) {
         setProfile(null)
       }
 
-      setLoading(false)
+      if (mounted.current) setLoading(false)
+      bootstrapDone = true
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // Durante el bootstrap inicial ignoramos el evento INITIAL_SESSION
+      // para que no compita con bootstrap(). Para cualquier evento posterior
+      // (TOKEN_REFRESHED, SIGNED_IN, SIGNED_OUT, etc.) sí actualizamos.
+      if (!bootstrapDone && event === 'INITIAL_SESSION') return
+
+      if (!mounted.current) return
+
+      setUser(session?.user ?? null)
+
+      if (session?.user) {
+        await loadProfile(session.user)
+      } else {
+        setProfile(null)
+      }
+
+      // Solo quitamos el loading si bootstrap ya terminó (o si es un evento
+      // posterior al inicio, p.ej. TOKEN_REFRESHED al volver de otra pestaña).
+      if (mounted.current) setLoading(false)
     })
 
-    // La primera vez que entramos a la app sí mostramos la carga (isBackground = false)
-    bootstrap(false)
+    bootstrap()
 
     return () => {
-      mounted = false
+      mounted.current = false
       subscription.unsubscribe()
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [loadProfile])
 
@@ -139,7 +145,9 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signIn, signUp, signOut, refreshProfile }}>
+    <AuthContext.Provider
+      value={{ user, profile, loading, signIn, signUp, signOut, refreshProfile }}
+    >
       {children}
     </AuthContext.Provider>
   )
