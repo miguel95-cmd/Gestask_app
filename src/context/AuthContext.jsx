@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
-
 import { AuthContext } from './authContext'
 
 function buildFallbackProfile(sessionUser) {
@@ -26,16 +25,23 @@ function buildFallbackProfile(sessionUser) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
+  // "loading" = todavía no sabemos si hay sesión ni perfil
+  // "profileLoading" = ya sabemos que hay user, pero el perfil aún no llegó
   const [loading, setLoading] = useState(true)
+  const [profileLoading, setProfileLoading] = useState(false)
 
-  // Ref para evitar actualizaciones de estado en componente desmontado
   const mounted = useRef(true)
 
   const loadProfile = useCallback(async (sessionUser) => {
     if (!sessionUser) {
-      if (mounted.current) setProfile(null)
+      if (mounted.current) {
+        setProfile(null)
+        setProfileLoading(false)
+      }
       return null
     }
+
+    if (mounted.current) setProfileLoading(true)
 
     const { data, error } = await supabase
       .from('profiles')
@@ -45,31 +51,22 @@ export function AuthProvider({ children }) {
 
     if (!mounted.current) return null
 
-    if (data) {
-      setProfile(data)
-      return data
-    }
-
     if (error) {
-      console.error('No se pudo cargar el profile del usuario:', error.message)
+      console.error('No se pudo cargar el perfil:', error.message)
     }
 
-    const fallbackProfile = buildFallbackProfile(sessionUser)
-    setProfile(fallbackProfile)
-    return fallbackProfile
+    const resolved = data ?? buildFallbackProfile(sessionUser)
+    setProfile(resolved)
+    setProfileLoading(false)
+    return resolved
   }, [])
 
   useEffect(() => {
     mounted.current = true
-
-    // Flag para que el listener sepa si bootstrap ya terminó,
-    // evitando que ambos corran en paralelo al inicio.
     let bootstrapDone = false
 
     async function bootstrap() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
+      const { data: { session } } = await supabase.auth.getSession()
 
       if (!mounted.current) return
 
@@ -85,28 +82,23 @@ export function AuthProvider({ children }) {
       bootstrapDone = true
     }
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Durante el bootstrap inicial ignoramos el evento INITIAL_SESSION
-      // para que no compita con bootstrap(). Para cualquier evento posterior
-      // (TOKEN_REFRESHED, SIGNED_IN, SIGNED_OUT, etc.) sí actualizamos.
-      if (!bootstrapDone && event === 'INITIAL_SESSION') return
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        // Ignorar INITIAL_SESSION: lo maneja bootstrap() para evitar carrera
+        if (!bootstrapDone && event === 'INITIAL_SESSION') return
+        if (!mounted.current) return
 
-      if (!mounted.current) return
+        setUser(session?.user ?? null)
 
-      setUser(session?.user ?? null)
+        if (session?.user) {
+          await loadProfile(session.user)
+        } else {
+          setProfile(null)
+        }
 
-      if (session?.user) {
-        await loadProfile(session.user)
-      } else {
-        setProfile(null)
+        if (mounted.current) setLoading(false)
       }
-
-      // Solo quitamos el loading si bootstrap ya terminó (o si es un evento
-      // posterior al inicio, p.ej. TOKEN_REFRESHED al volver de otra pestaña).
-      if (mounted.current) setLoading(false)
-    })
+    )
 
     bootstrap()
 
@@ -125,14 +117,8 @@ export function AuthProvider({ children }) {
     const { error } = await supabase.auth.signUp({
       email,
       password,
-      options: {
-        data: {
-          full_name: fullName,
-          role: 'student',
-        },
-      },
+      options: { data: { full_name: fullName, role: 'student' } },
     })
-
     return { error }
   }
 
@@ -146,7 +132,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, profile, loading, signIn, signUp, signOut, refreshProfile }}
+      value={{ user, profile, loading, profileLoading, signIn, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>
